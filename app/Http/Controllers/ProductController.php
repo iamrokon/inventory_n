@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\Category;
 use App\Models\Product;
+use Cache;
 use Illuminate\Http\Request;
 
 class ProductController extends Controller
@@ -11,28 +12,33 @@ class ProductController extends Controller
     /**
      * Display a listing of the resource.
      */
-    // public function index()
-    // {
-    //     $products = Product::all();
-    //     return view('index', compact('products'));
-    // }
+
     public function index(Request $request)
     {
-        $query = \App\Models\Product::query();
+        $search = $request->input('search');
 
-        if ($search = $request->input('search')) {
-            $query->where(function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                ->orWhere('description', 'like', "%{$search}%")
-                ->orWhereHas('category', function ($q2) use ($search) {
-                    $q2->where('name', 'like', "%{$search}%");
+        // Create a unique cache key based on the search query
+        $cacheKey = 'products_' . md5($search ?? 'all');
+
+        $products = Cache::remember($cacheKey, now()->addMinutes(10), function () use ($search) {
+            $query = Product::with('category');
+
+            if ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('description', 'like', "%{$search}%")
+                        ->orWhereHas('category', function ($q2) use ($search) {
+                            $q2->where('name', 'like', "%{$search}%");
+                        });
                 });
-            });
-        }
+            }
 
-        $products = $query->latest()->get();
+            return $query->latest()->get();
+        });
 
-        return view('index', compact('products'));
+        return view('index', [
+            'products' => $products
+        ]);
     }
 
     /**
@@ -40,7 +46,10 @@ class ProductController extends Controller
      */
     public function create()
     {
-        $categories = Category::all();
+        $categories = Cache::remember('all_categories', now()->addMinutes(30), function () {
+            return Category::all();
+        });
+
         return view('products.create', compact('categories'));
     }
 
@@ -58,6 +67,7 @@ class ProductController extends Controller
         ]);
 
         Product::create($request->all());
+        Cache::flush();
 
         return redirect()->route('products.index')->with('success', 'Product created successfully.');
     }
@@ -75,8 +85,13 @@ class ProductController extends Controller
      */
     public function edit(string $id)
     {
-        $product = Product::findOrFail($id);
-        $categories = Category::all();
+        $product = Cache::remember("product_edit_{$id}", now()->addMinutes(10), function () use ($id) {
+            return Product::findOrFail($id);
+        });
+
+        $categories = Cache::remember('all_categories', now()->addMinutes(30), function () {
+            return Category::all();
+        });
         return view('products.edit', compact('product', 'categories'));
     }
 
@@ -95,6 +110,7 @@ class ProductController extends Controller
 
         $product = Product::findOrFail($id);
         $product->update($request->all());
+        Cache::flush();
 
         return redirect()->route('products.index')->with('success', 'Product updated successfully.');
     }
@@ -106,6 +122,7 @@ class ProductController extends Controller
     {
         $product = Product::findOrFail($id);
         $product->delete();
+        Cache::flush();
 
         return redirect()->route('products.index')->with('success', 'Product deleted successfully.');
     }
